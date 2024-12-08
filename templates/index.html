@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Recognition Attendance</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/opencv.js"></script> <!-- OpenCV.js -->
+</head>
+<body>
+    <h2>Face Recognition Attendance</h2>
+
+    <video id="webcam" width="640" height="480" autoplay></video>
+    <canvas id="canvas" width="640" height="480"></canvas>
+    <button id="captureBtn" disabled>Capture</button>
+    <div id="prediction"></div>
+
+    <script type="text/javascript">
+        const webcamElement = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const captureBtn = document.getElementById('captureBtn');
+        const predictionContainer = document.getElementById('prediction');
+
+        let model, videoStream;
+        let faceCascade;
+
+        // Initialize OpenCV and the webcam
+        async function init() {
+            console.log("Initializing...");
+
+            // Load OpenCV face detection cascade
+            faceCascade = new cv.CascadeClassifier();
+            const cascadeLoaded = await loadCascade('haarcascade_frontalface_default.xml');
+            if (!cascadeLoaded) {
+                console.error("Failed to load face cascade.");
+                return;
+            }
+
+            // Load Teachable Machine model
+            const URL = "model/";
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+            model = await tmImage.load(modelURL, metadataURL);
+            console.log("Model loaded successfully.");
+
+            // Start the webcam
+            try {
+                videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                webcamElement.srcObject = videoStream;
+                webcamElement.onloadedmetadata = () => webcamElement.play();
+            } catch (err) {
+                console.error("Error accessing webcam:", err);
+                return;
+            }
+
+            window.requestAnimationFrame(loop);
+        }
+
+        // Load the Haar cascade XML file
+        async function loadCascade(filePath) {
+            const response = await fetch(filePath);
+            if (response.ok) {
+                const data = await response.text();
+                const fileData = new Uint8Array(data.length);
+                for (let i = 0; i < data.length; i++) {
+                    fileData[i] = data.charCodeAt(i);
+                }
+                faceCascade.load(new cv.Mat(fileData, false));
+                console.log("Cascade loaded successfully.");
+                return true;
+            }
+            return false;
+        }
+
+        // Main loop for face detection and prediction
+        async function loop() {
+            // Draw video frame onto canvas
+            ctx.drawImage(webcamElement, 0, 0, canvas.width, canvas.height);
+            const frame = cv.imread(canvas);
+
+            // Convert to grayscale for face detection
+            const gray = new cv.Mat();
+            cv.cvtColor(frame, gray, cv.COLOR_RGBA2GRAY);
+
+            // Detect faces
+            const faces = new cv.RectVector();
+            faceCascade.detectMultiScale(gray, faces);
+
+            if (faces.size() > 0) {
+                console.log(`Detected ${faces.size()} face(s).`);
+                const face = faces.get(0); // Take the first detected face
+                ctx.strokeStyle = 'green';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(face.x, face.y, face.width, face.height);
+
+                // Crop and predict the face region
+                const croppedFace = frame.roi(face);
+                const prediction = await predictFace(croppedFace);
+                predictionContainer.innerHTML = `Class: ${prediction.className}, Confidence: ${prediction.confidence.toFixed(2)}`;
+                captureBtn.disabled = false;
+            } else {
+                predictionContainer.innerHTML = "No faces detected.";
+                captureBtn.disabled = true;
+            }
+
+            frame.delete();
+            gray.delete();
+            faces.delete();
+
+            window.requestAnimationFrame(loop);
+        }
+
+        // Predict the class of the detected face
+        async function predictFace(faceRegion) {
+            const faceCanvas = document.createElement('canvas');
+            const faceCtx = faceCanvas.getContext('2d');
+            faceCanvas.width = faceRegion.cols;
+            faceCanvas.height = faceRegion.rows;
+
+            // Draw cropped face on temporary canvas
+            faceCtx.putImageData(new ImageData(new Uint8ClampedArray(faceRegion.data), faceRegion.cols, faceRegion.rows), 0, 0);
+
+            const prediction = await model.predict(faceCanvas);
+            const highestPrediction = prediction.reduce((max, p) => (p.probability > max.probability ? p : max), prediction[0]);
+
+            return { className: highestPrediction.className, confidence: highestPrediction.probability };
+        }
+
+        // Capture button click event
+        captureBtn.addEventListener('click', () => {
+            console.log("Captured face!");
+            // Implement the capture logic here (e.g., send data to backend)
+        });
+
+        // Start the app
+        init();
+    </script>
+</body>
+</html>
